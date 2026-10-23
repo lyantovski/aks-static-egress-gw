@@ -1,0 +1,143 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: egress-probe
+  namespace: egress-demo
+data:
+  probe.sh: |
+    set -eu
+    while true; do
+      if ! ip="$(curl --ipv4 --fail --silent --show-error --noproxy '*' --connect-timeout 10 --max-time 30 https://api.ipify.org)"; then
+        echo "ERROR: outbound IP lookup failed for ${APP_NAME}" >&2
+        exit 1
+      fi
+      printf '%s\n' "$ip" > /tmp/last-ip
+      printf '%s app=%s outbound_ip=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$APP_NAME" "$ip"
+      sleep 30
+    done
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: application-1
+  namespace: egress-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: application-1
+  template:
+    metadata:
+      labels:
+        app: application-1
+      annotations:
+        kubernetes.azure.com/static-gateway-configuration: static-egress
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.azure.com/agentpool: apps
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: probe
+          image: curlimages/curl:8.12.1
+          command: ["/bin/sh", "/scripts/probe.sh"]
+          env:
+            - name: APP_NAME
+              value: application-1
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "test -s /tmp/last-ip"]
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: scripts
+          configMap:
+            name: egress-probe
+        - name: tmp
+          emptyDir:
+            sizeLimit: 8Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: application-2
+  namespace: egress-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: application-2
+  template:
+    metadata:
+      labels:
+        app: application-2
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.azure.com/agentpool: apps
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: probe
+          image: curlimages/curl:8.12.1
+          command: ["/bin/sh", "/scripts/probe.sh"]
+          env:
+            - name: APP_NAME
+              value: application-2
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "test -s /tmp/last-ip"]
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: scripts
+          configMap:
+            name: egress-probe
+        - name: tmp
+          emptyDir:
+            sizeLimit: 8Mi
